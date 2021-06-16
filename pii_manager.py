@@ -4,7 +4,7 @@ DONE:
 1 - Replace all stagnant entities like PERSON, EMAIL, PHONE_NUMBER
 2 - Replace non-stagnant entities by mapping them to their translation. 
     Idea here is that we hard code the translations for non-stagnant entities and replace them via this mapping. Example of this 
-    implementation is in lines 172-179 covering the case for possessive pronouns
+    implementation is in the elif block in line 165 covering the case for possessive pronouns and titles
 TODO:
 * detect all the other types of PII covered by presideo, and use male/female/non-binary names provdied by faker based on deteced gender
 * swap religion, ethnicity, obtain words from wordnet
@@ -89,7 +89,6 @@ def langid_ext(s1, en_lang_cutoff=0.1):
 	else:
 		try:
 			lang = langid.classify(s1)[0]
-			print('else block')
 		except Exception as e:
 			print(e)
 			lang = ''
@@ -145,35 +144,47 @@ def back_trans(x, intermediate='pt', to='en'):
 
 def swap_entities(results, orig_str, en_str, origin_lang):
 	new_str = orig_str
+
 	for res in results:
 		entity = en_str[res.start:res.end]
 		start_idx = new_str.find(entity)
+
 		if res.entity_type in STAGNANT_ENTITIES:
 			if res.entity_type == "PHONE_NUMBER":
 				new_phone = faker.phone_number()
 				new_str = new_str[:start_idx] + new_phone + new_str[start_idx + len(entity):]
+
 			elif res.entity_type == "EMAIL_ADDRESS":
 				new_email = faker.safe_email()
 				new_str = new_str[:start_idx] + new_email + new_str[start_idx + len(entity):]
+
 			elif res.entity_type == "PERSON":
 				new_name = faker.name()
 				new_str = new_str[:start_idx] + new_name + new_str[start_idx + len(entity):]
+
 		elif origin_lang != 'en':
 			if res.entity_type == "POSSESSIVE_PRONOUN":
 				# indexing off zero because assuming it is one - to - one (one translation per entity)
 				entity_foreign = list(poss_pronoun_swap_.get(entity, {}).get(origin_lang, {}).keys())[0]
 				start_idx = new_str.find(entity_foreign)
-
 				new_poss_pronoun = poss_pronoun_swap_.get(entity, {}).get(origin_lang, {}).get(entity_foreign, '')
 				new_str = new_str[:start_idx] + new_poss_pronoun + new_str[start_idx + len(entity_foreign):]
+
+			elif res.entity_type == "TITLE":
+				entity_foreign = list(title_swap_.get(entity, {}).get(origin_lang, {}).keys())[0]
+				start_idx = new_str.find(entity_foreign)
+				new_title = title_swap_.get(entity, {}).get(origin_lang, {}).get(entity_foreign, '')
+				new_str = new_str[:start_idx] + new_title + new_str[start_idx + len(entity_foreign):]
 
 		elif origin_lang == 'en':
 			if res.entity_type == "PRONOUN":
 				new_pronoun = pronoun_swap.get(entity, 'they')
 				new_str = new_str[:start_idx] + new_pronoun + new_str[start_idx + len(entity):]
+
 			elif res.entity_type == "POSSESSIVE_PRONOUN":
 				new_poss_pronoun = poss_pronoun_swap.get(entity, 'their')
 				new_str = new_str[:start_idx] + new_poss_pronoun + new_str[start_idx + len(entity):]
+
 			elif res.entity_type == "TITLE":
 				new_title = title_swap.get(entity, 'Mx')
 				new_str = new_str[:start_idx] + new_title + new_str[start_idx + len(entity):]
@@ -181,25 +192,22 @@ def swap_entities(results, orig_str, en_str, origin_lang):
 	return new_str
 
 
-
-
-
-
 if __name__ == "__main__":
 	# text_to_anonymize = 'Mr. Jones is a doctor, and he has the following phone number: 713-333-0565 and his two emails are: email1@contoso.com and email2@contoso.com'
 	text_to_anonymize = "Domnul Vexe este medic și are următorul număr de telefon: 713-333-0565, iar cele două e-mailuri ale sale sunt: ​​email1@contoso.com și email2@contoso.com"
 	# text_to_anonymize = "Se llamo Elizabeth y su numero de telefóno es +1 (555) 555 - 5555 y su e-mail es foo@bar.com."
 
+	print(f'original string: {text_to_anonymize}\n')
+
 	origin_lang = langid_ext(text_to_anonymize)
-	print(f'origin_lang: {origin_lang}\n\n')
+	print(f'original language: {origin_lang}\n')
 	if origin_lang != 'en':
-		print(f'detected lang, {origin_lang}')
 		text_to_anonymize_en = str(TextBlob(text_to_anonymize).translate(to='en'))
 	else:
 		text_to_anonymize_en = text_to_anonymize
 
-	print(text_to_anonymize_en)
-	print('*****************************\n')
+	print(f'translated string: {text_to_anonymize_en}')
+	print('\n*****************************\n')
 
 	analyzer_results = analyzer.analyze(text=text_to_anonymize_en, language='en')
 
