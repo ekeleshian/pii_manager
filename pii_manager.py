@@ -1,3 +1,18 @@
+"""
+DONE:
+* removed back_trans altogether to experiment on the combo of two strategies: 
+1 - Replace all stagnant entities like PERSON, EMAIL, PHONE_NUMBER
+2 - Replace non-stagnant entities by mapping them to their translation. 
+    Idea here is that we hard code the translations for non-stagnant entities and replace them via this mapping. Example of this 
+    implementation is in lines 172-179 covering the case for possessive pronouns
+TODO:
+* detect all the other types of PII covered by presideo, and use male/female/non-binary names provdied by faker based on deteced gender
+* swap religion, ethnicity, obtain words from wordnet
+* improve strategy on gender swapping with regards to profession
+* remove textblob dependency as it using google api
+* implement multithreading to handle multiple document processing
+"""
+
 from textblob import TextBlob
 from presidio_analyzer import AnalyzerEngine
 from presidio_anonymizer import AnonymizerEngine
@@ -18,7 +33,7 @@ faker.add_provider(internet)
 titles_recognizer = PatternRecognizer(supported_entity='TITLE', deny_list=["Mr.", "Mrs.", "Miss"])
 
 pronoun_recognizer = PatternRecognizer(supported_entity='PRONOUN', deny_list=['he', 'He', 'she', 'She'])
-poss_pronoun_recognizer = PatternRecognizer(supported_entity="POSSESIVE_PRONOUN", deny_list=["his", "her", "His", "Her", 'hers', 'Hers'])
+poss_pronoun_recognizer = PatternRecognizer(supported_entity="POSSESSIVE_PRONOUN", deny_list=["his", "her", "His", "Her", 'hers', 'Hers'])
 
 pronoun_swap = {'he': 'she', 'He': 'She', 'his': 'her', 'His': 'Her', \
                 'she': 'he', 'She': 'He', 'her': 'his', 'hers': 'his', \
@@ -42,7 +57,7 @@ pronoun_swap_ = {
 ## experimentation below
 poss_pronoun_swap_ = {
 	'his': \
-	{'ro': {'ale sale': 'ei', 'său': 'săi'}}
+	{'ro': {'ale sale': 'ale ei'}}
 }
 
 # experimentation below
@@ -94,7 +109,6 @@ def langid_ext(s1, en_lang_cutoff=0.1):
 	return lang
 
 
-#TODO: detect all the other types of PII covered by prediseo, and use male/female/non-binary names provdied by faker based on deteced gender.
 def anonymize_faker_lambda(analyzer_results, text_to_anonymize):
 	anonymized_results = anonymizer.anonymize(
 		text = text_to_anonymize,
@@ -105,13 +119,12 @@ def anonymize_faker_lambda(analyzer_results, text_to_anonymize):
 		"PRONOUN": OperatorConfig("custom", {'lambda': lambda x: pronoun_swap.get(x, "they")}), \
 		"PHONE_NUMBER": OperatorConfig("custom", {"lambda": lambda x: faker.phone_number()}), \
 		"EMAIL_ADDRESS": OperatorConfig("custom", {"lambda": lambda x: faker.safe_email()}), \
-		"POSSESIVE_PRONOUN": OperatorConfig("custom", {'lambda': lambda x: pronoun_swap.get(x, 'their')})
+		"POSSESSIVE_PRONOUN": OperatorConfig("custom", {'lambda': lambda x: pronoun_swap.get(x, 'their')})
 		}
 	)
 	return anonymized_results
 
-# we use back translate to fix grammar problesm, etc. we might introduce by doing anonymization and replacement.
-# set the 'to' lang to the origin language. assuming trans to engliish is the most covered
+
 def back_trans(x, intermediate='pt', to='en'):
 
 	x1 = x
@@ -128,23 +141,9 @@ def back_trans(x, intermediate='pt', to='en'):
 
 
 
-# text blob uses googletrans. we wll need somethingn that doesn't dependon the api i
+# text blob uses googletrans. we wll need somethingn that doesn't depend on the api 
 
-"""
-hey - it's just me working on this for now. I don't know what anyone else is doing. the back_trans. 
-I orignally had it from en to x back to en. but if it's already in a non-en langauge, 
-then it doesn't need to go through a third lang. Also, one thing to improve this is to do some sort of sequence matching
- of the original sentence and the new sentence replaced with the different name, etc. to see what slots are really changed, 
- and what are just potential errors in translation. If you have any methods you know of you've discovered lmk. (edited) 
-
-Some thoughts on gender swapping - we get a list of persons and professions and see if there are male female counterparts. girl->boy waiter->waitress.
-Also swap religion, ethnic orign, etc. Most of these words are in wordnet.
-We could try doing embedding analogies too, but embeddings can have their own biases. we don't want to see if we can change the gender of doctor from male to female and end up with nurse. (edited) 
-Another thing to do is more closely tie faker with presidio. Faker has it's own regex matcher as test cases for various PII. Those testers could themselves be used for doing deteciton in presidio.
-
-"""
-
-def swap_stagnant_entities(results, orig_str, en_str, origin_lang):
+def swap_entities(results, orig_str, en_str, origin_lang):
 	new_str = orig_str
 	for res in results:
 		entity = en_str[res.start:res.end]
@@ -159,11 +158,20 @@ def swap_stagnant_entities(results, orig_str, en_str, origin_lang):
 			elif res.entity_type == "PERSON":
 				new_name = faker.name()
 				new_str = new_str[:start_idx] + new_name + new_str[start_idx + len(entity):]
+		elif origin_lang != 'en':
+			if res.entity_type == "POSSESSIVE_PRONOUN":
+				# indexing off zero because assuming it is one - to - one (one translation per entity)
+				entity_foreign = list(poss_pronoun_swap_.get(entity, {}).get(origin_lang, {}).keys())[0]
+				start_idx = new_str.find(entity_foreign)
+
+				new_poss_pronoun = poss_pronoun_swap_.get(entity, {}).get(origin_lang, {}).get(entity_foreign, '')
+				new_str = new_str[:start_idx] + new_poss_pronoun + new_str[start_idx + len(entity_foreign):]
+
 		elif origin_lang == 'en':
 			if res.entity_type == "PRONOUN":
 				new_pronoun = pronoun_swap.get(entity, 'they')
 				new_str = new_str[:start_idx] + new_pronoun + new_str[start_idx + len(entity):]
-			elif res.entity_type == "POSSESIVE_PRONOUN":
+			elif res.entity_type == "POSSESSIVE_PRONOUN":
 				new_poss_pronoun = poss_pronoun_swap.get(entity, 'their')
 				new_str = new_str[:start_idx] + new_poss_pronoun + new_str[start_idx + len(entity):]
 			elif res.entity_type == "TITLE":
@@ -178,14 +186,10 @@ def swap_stagnant_entities(results, orig_str, en_str, origin_lang):
 
 
 if __name__ == "__main__":
-	text_to_anonymize = 'Mr. Jones is a doctor, and he has the following phone number: 713-333-0565 and his two emails are: email1@contoso.com and email2@contoso.com'
-	# text_to_anonymize = """
-	# Domnul Vexe este medic și are următorul număr de telefon: 713-333-0565, 
-	# iar cele două e-mailuri ale sale sunt: ​​email1@contoso.com și email2@contoso.com
-	# """
+	# text_to_anonymize = 'Mr. Jones is a doctor, and he has the following phone number: 713-333-0565 and his two emails are: email1@contoso.com and email2@contoso.com'
+	text_to_anonymize = "Domnul Vexe este medic și are următorul număr de telefon: 713-333-0565, iar cele două e-mailuri ale sale sunt: ​​email1@contoso.com și email2@contoso.com"
 	# text_to_anonymize = "Se llamo Elizabeth y su numero de telefóno es +1 (555) 555 - 5555 y su e-mail es foo@bar.com."
 
-	#we do translation to english because the tools we use work in english mostly. we translate back to origin language at the end
 	origin_lang = langid_ext(text_to_anonymize)
 	print(f'origin_lang: {origin_lang}\n\n')
 	if origin_lang != 'en':
@@ -199,7 +203,7 @@ if __name__ == "__main__":
 
 	analyzer_results = analyzer.analyze(text=text_to_anonymize_en, language='en')
 
-	new_text = swap_stagnant_entities(analyzer_results, text_to_anonymize, text_to_anonymize_en, origin_lang)
+	new_text = swap_entities(analyzer_results, text_to_anonymize, text_to_anonymize_en, origin_lang)
 
 	print(new_text)
 	# anonymized_results = anonymize_faker_lambda(analyzer_results, text_to_anonymize_en)
